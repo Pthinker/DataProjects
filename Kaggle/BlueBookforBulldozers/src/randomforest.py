@@ -35,7 +35,7 @@ for col in columns:
         train_fea = train_fea.join(train[col].fillna(0))
         test_fea = test_fea.join(test[col].fillna(0))
 
-rf = RandomForestRegressor(n_estimators=50, n_jobs=1, compute_importances = True)
+rf = RandomForestRegressor(n_estimators=1000, n_jobs=20, compute_importances=True)
 rf.fit(train_fea, train["SalePrice"])
 predictions = rf.predict(test_fea)
 imp = sorted(zip(train_fea.columns, rf.feature_importances_), key=lambda tup: tup[1], reverse=True)

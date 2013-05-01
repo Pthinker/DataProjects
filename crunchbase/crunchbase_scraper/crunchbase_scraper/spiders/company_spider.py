@@ -4,11 +4,13 @@ from scrapy.http import Request
 from crunchbase_scraper.items import CompanyItem
 
 from datetime import datetime
+import os
 
 
 class CompanySpider(BaseSpider):
     name = "company"
     allowed_domains = ["crunchbase.com"]
+    api_key = "sn86p65fg2m5cwu6gjtz7dep"
 
     clist = map(chr, range(97, 123))
     clist.append('other')
@@ -21,9 +23,23 @@ class CompanySpider(BaseSpider):
         company_urls = hxs.select('//table[@class="col2_table_listing"]//li/a/@href').extract()
 
         for url in company_urls:
-            url = "http://www.crunchbase.com" + url
-            yield Request(url, callback=self.parse_company)
+            crunch_id = url.split("/")[-1].strip()
+            api_url = "http://api.crunchbase.com/v/1/company/%s.js?api_key=%s" % \
+                    (crunch_id, self.api_key)
+            yield Request(api_url, callback=lambda r, crunch_id=crunch_id:self.parse_json(r, crunch_id))
+            #url = "http://www.crunchbase.com" + url
+            #yield Request(url, callback=self.parse_company)
 
+    def parse_json(self, response, crunch_id):
+        fpath = "crunchbase_scraper/company_json/%s.json" % crunch_id
+        if not os.path.exists(fpath):
+            with open(fpath, "w") as fh:
+                fh.write(response.body)
+
+
+    """
+    Deprecated
+    """
     def parse_company(self, response):
         hxs = HtmlXPathSelector(response)
         

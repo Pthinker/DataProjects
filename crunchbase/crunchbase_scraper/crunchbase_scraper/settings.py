@@ -15,5 +15,5 @@ NEWSPIDER_MODULE = 'crunchbase_scraper.spiders'
 #USER_AGENT = 'crunchbase_scraper (+http://www.yourdomain.com)'
 
 ITEM_PIPELINES = [
-    'crunchbase_scraper.pipelines.MysqlStorePipeline',
+    #'crunchbase_scraper.pipelines.MysqlStorePipeline',
 ]

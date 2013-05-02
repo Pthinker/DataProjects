@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import func
 import operator
-from db import Company, Investment, IPO, Investment, Acquisition
+from db import Company, Investment, IPO, Investment, Acquisition, People, CompanyPeople
 
 
 engine = create_engine('mysql://admin:admin@localhost/crunchbase?charset=utf8')
@@ -19,7 +19,7 @@ def company_year_bar():
     for yr in range(1995, 2013):
         numbers.append(session.query(Company).filter(Company.founded==yr).count())
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111)
     ax.bar(range(1995, 2013), numbers, color=colors[0], edgecolor=colors[0], align="center", width=0.8, alpha=0.6, lw=2)
     ax.grid(True)
@@ -44,7 +44,7 @@ def company_category_bar(year=2012):
         categories.append(cat)
         counts.append(count)
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111)
     pos = np.arange(len(categories)) + .5
 
@@ -68,7 +68,7 @@ def company_category_year_plot():
         for yr in range(1995, 2013):
             category_count[category].append(session.query(Company).filter(Company.category==category, Company.founded==yr).count())
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8,6))
     ax = fig.add_subplot(111)
     
     for category in category_count:
@@ -83,7 +83,7 @@ def company_category_year_plot():
     plt.savefig("plots/category_trend.pdf")
     plt.show()
 
-def organization_investment_piechart(org="intel-capital"):
+def organization_investment_piechart(org="google-ventures", year=2012):
     # intel-capital, sv-angel, google-ventures
     session = Session()
     
@@ -91,22 +91,21 @@ def organization_investment_piechart(org="intel-capital"):
     for com in session.query(Company).filter(Company.category!=None):
         com_cat[com.crunch_id] = com.category
 
-    org_invests = session.query(Investment).filter(Investment.org_source==org)
+    org_invests = session.query(Investment).filter(Investment.org_source==org, Investment.year==str(year))
     
-    fig, axes = plt.subplots(nrows=1, ncols=5)
-    for i, ax in enumerate(axes):
-        cat_count = {}
-        for invest in org_invests:
-            if invest.year == str(2008+i):
-                if invest.company in com_cat and com_cat[invest.company] != None:
-                    cat_count[com_cat[invest.company]] = cat_count.get(com_cat[invest.company], 0) + 1
-        total = 0
-        for cat in cat_count:
-            total += cat_count[cat]
-        frac = [float(cat_count[c])/total for c in cat_count]
-        labels = [c for c in cat_count]
-        ax.pie(frac, labels=labels)
-    plt.savefig("%s-invest-piechart.pdf" % org)
+    fig = plt.figure(figsize=(6, 6))
+    ax = fig.add_subplot(111)
+    cat_count = {}
+    for invest in org_invests:
+        if invest.company in com_cat and com_cat[invest.company] != None:
+            cat_count[com_cat[invest.company]] = cat_count.get(com_cat[invest.company], 0) + 1
+    total = 0
+    for cat in cat_count:
+        total += cat_count[cat]
+    frac = [float(cat_count[c])/total for c in cat_count]
+    labels = [c for c in cat_count]
+    ax.pie(frac, labels=labels)
+    plt.savefig("plots/%s_%s_invest_piechart.pdf" % (org, str(year)))
     plt.show()
 
 def profit_loss():
@@ -134,7 +133,7 @@ def profit_loss():
     acq_values = np.array(acq_values)
     acq_invest_values = np.array(acq_invest_values)
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8,6))
     ax = fig.add_subplot(111)
     ax.grid(True)
     ax.set_xscale('log')
@@ -147,6 +146,54 @@ def profit_loss():
     plt.savefig("plots/profit_loss.pdf")
     plt.show()
 
+def if_collegue(session, p1, p2):
+    p1_com = []
+    for com_peo in session.query(CompanyPeople).filter(CompanyPeople.people==p1.people):
+        p1_com.append(com_peo.company)
+    p2_com = []
+    for com_peo in session.query(CompanyPeople).filter(CompanyPeople.people==p2.people):
+        p2_com.append(com_peo.company)
+    return bool(set(p1_com) & set(p2_com))
+    
+
+def people_network(cat='mobile', year=2012):
+    session = Session()
+    companies = session.query(Company).filter(Company.category==cat, Company.founded==year)
+    persons = []
+    for com in companies:
+        com_people = session.query(CompanyPeople).filter(CompanyPeople.company==com.crunch_id, CompanyPeople.is_past==False)
+        persons.extend(com_people)
+    ofh = open("%s_%s_graph.gexf" % (cat, str(year)), "w")
+    ofh.write('''<gexf xmlns:viz="http:///www.gexf.net/1.1draft/viz" xmlns="http://www.gexf.net/1.1draft" version="1.1">\n''')
+    ofh.write('''<graph defaultedgetype="undirected">\n''')
+
+    ofh.write('<nodes count="%d">\n' % len(persons))
+    for p in persons:
+        ofh.write('<node id="%s" lable=" ">\n' % p.people)
+        ofh.write('<viz:size value="1"/>\n')
+        ofh.write('</node>')
+    ofh.write('</nodes>\n')
+    
+    i = 0
+    edges_text = ""
+    for p1 in persons:
+        for p2 in persons:
+            if p2.people != p1.people:
+                if if_collegue(session, p1, p2):
+                    print "True"
+                    edges_text += '<edge id="%d" source="%s" target="%s" weight="1.0"/>\n' % (i, p1.people, p2.people)
+                    i += 1
+
+    ofh.write('<edges count = "%d">\n' % i)
+    ofh.write(edges_text)
+
+    ofh.write("</edges>\n")
+    ofh.write("</graph>\n")
+    ofh.write("</gexf>")
+
+    ofh.close()
+
+
 def main():
     #company_year_bar()
 
@@ -154,9 +201,11 @@ def main():
  
     #company_category_year_plot()
 
-    #organization_investment_piechart("intel-capital")
+    #organization_investment_piechart("google-ventures", year=2009)
 
-    profit_loss()
+    #profit_loss()
+
+    people_network(cat='mobile', year=2012)
 
 
 if __name__ == "__main__":

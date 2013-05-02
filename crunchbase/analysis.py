@@ -1,9 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from pylab import *
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import func
 import operator
-from db import Company
+from db import Company, Investment, IPO, Investment, Acquisition
 
 
 engine = create_engine('mysql://admin:admin@localhost/crunchbase?charset=utf8')
@@ -81,13 +83,80 @@ def company_category_year_plot():
     plt.savefig("plots/category_trend.pdf")
     plt.show()
 
+def organization_investment_piechart(org="intel-capital"):
+    # intel-capital, sv-angel, google-ventures
+    session = Session()
+    
+    com_cat = {}
+    for com in session.query(Company).filter(Company.category!=None):
+        com_cat[com.crunch_id] = com.category
+
+    org_invests = session.query(Investment).filter(Investment.org_source==org)
+    
+    fig, axes = plt.subplots(nrows=1, ncols=5)
+    for i, ax in enumerate(axes):
+        cat_count = {}
+        for invest in org_invests:
+            if invest.year == str(2008+i):
+                if invest.company in com_cat and com_cat[invest.company] != None:
+                    cat_count[com_cat[invest.company]] = cat_count.get(com_cat[invest.company], 0) + 1
+        total = 0
+        for cat in cat_count:
+            total += cat_count[cat]
+        frac = [float(cat_count[c])/total for c in cat_count]
+        labels = [c for c in cat_count]
+        ax.pie(frac, labels=labels)
+    plt.savefig("%s-invest-piechart.pdf" % org)
+    plt.show()
+
+def profit_loss():
+    session = Session()
+
+    ipos = session.query(IPO).filter(IPO.valuation!=None)
+    ipo_values = []
+    invest_values = []
+    for ipo in ipos:
+        invest_value = session.query(func.sum(Investment.amount).label('total')).filter(Investment.company==ipo.company).first().total
+        if invest_value is not None:
+            ipo_values.append(ipo.valuation)
+            invest_values.append(float(invest_value))
+    ipo_values = np.array(ipo_values)
+    invest_values = np.array(invest_values)
+
+    acqs = session.query(Acquisition).filter(Acquisition.amount!=None)
+    acq_values = []
+    acq_invest_values = []
+    for acq in acqs:
+        invest_value = session.query(func.sum(Investment.amount).label('total')).filter(Investment.company==acq.company).first().total
+        if invest_value is not None:
+            acq_values.append(acq.amount)
+            acq_invest_values.append(float(invest_value))
+    acq_values = np.array(acq_values)
+    acq_invest_values = np.array(acq_invest_values)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.grid(True)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Total funding raised before exit')
+    ax.set_ylabel('IPO valuation / Acquisition amount')
+    ax.plot(invest_values, ipo_values, 'o', color='green', alpha=0.8, markersize=10, label="IPO")
+    ax.plot(acq_invest_values, acq_values, 'o', color='blue', alpha=0.8, markersize=10, label="Acquisition")
+    ax.legend()
+    plt.savefig("plots/profit_loss.pdf")
+    plt.show()
 
 def main():
     #company_year_bar()
 
     #company_category_bar(2012)
  
-    company_category_year_plot()
+    #company_category_year_plot()
+
+    #organization_investment_piechart("intel-capital")
+
+    profit_loss()
 
 
 if __name__ == "__main__":

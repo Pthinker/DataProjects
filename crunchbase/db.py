@@ -1,5 +1,5 @@
 from sqlalchemy import create_engine, Column, Table, MetaData, ForeignKey
-from sqlalchemy import Integer, String, Text, Numeric, Boolean
+from sqlalchemy import Integer, String, Text, Numeric, Boolean, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import simplejson as json
@@ -66,6 +66,29 @@ class FinancialOrg(Base):
     tags = Column(String(300))
     overview = Column(Text)
 
+class IPO(Base):
+    __tablename__ = 'ipos'
+
+    id = Column(Integer, primary_key=True)
+    company = Column(String(100), ForeignKey("companies.crunch_id", ondelete='CASCADE'))
+    valuation = Column(Float)
+    currency = Column(String(10))
+    year = Column(String(4))
+    month = Column(Integer)
+    day = Column(Integer)
+
+class Acquisition(Base):
+    __tablename__ = 'acquisitions'
+
+    id = Column(Integer, primary_key=True)
+    company = Column(String(100), ForeignKey("companies.crunch_id", ondelete='CASCADE'))
+    acquiring_company = Column(String(100), ForeignKey("companies.crunch_id", ondelete='CASCADE'))
+    amount = Column(Float)
+    currency = Column(String(10))
+    year = Column(String(4))
+    month = Column(Integer)
+    day = Column(Integer)
+
 class Investment(Base):
     __tablename__ = 'investments'
 
@@ -94,34 +117,26 @@ def store_companies():
             com = Company()
             com.name = com_dict['name']
             com.crunch_id = os.path.splitext(fname)[0]
-            if 'twitter_username' in com_dict:
-                com.twitter = com_dict['twitter_username']
-            if 'category_code' in com_dict:
-                com.category = com_dict['category_code']
-            if 'number_of_employees' in com_dict:
-                com.employee_num = com_dict['number_of_employees']
-            if 'founded_year' in com_dict:
-                com.founded = com_dict['founded_year']
-            if 'tag_list' in com_dict:
-                com.tags = com_dict['tag_list']
-            if 'description' in com_dict:
-                com.desc = com_dict['description']
-            if 'overview' in com_dict:
-                com.overview = com_dict['overview']
-            if 'total_money_raised' in com_dict:
-                money = com_dict['total_money_raised']
-                matobj = re.search(r"([\d\.]+)", money)
-                if matobj:
-                    num = matobj.group(1)
-                    if money[-1].upper() == 'M':
-                        money = float(num) * 1000000
-                    elif money[-1].upper() == 'B':
-                        money = float(num) * 1000000000
-                    elif money[-1].upper() == 'K':
-                        money = float(num) * 1000
-                    else:
-                        money = float(num)
-                    com.total_money_raised = money
+            com.twitter = com_dict['twitter_username']
+            com.category = com_dict['category_code']
+            com.employee_num = com_dict['number_of_employees']
+            com.founded = com_dict['founded_year']
+            com.tags = com_dict['tag_list']
+            com.desc = com_dict['description']
+            com.overview = com_dict['overview']
+            money = com_dict['total_money_raised']
+            matobj = re.search(r"([\d\.]+)", money)
+            if matobj:
+                num = matobj.group(1)
+                if money[-1].upper() == 'M':
+                    money = float(num) * 1000000
+                elif money[-1].upper() == 'B':
+                    money = float(num) * 1000000000
+                elif money[-1].upper() == 'K':
+                    money = float(num) * 1000
+                else:
+                    money = float(num)
+                com.total_money_raised = money
             session.add(com)
     session.commit()
 
@@ -276,6 +291,7 @@ def store_investments():
             invest.people_source = p_dict['permalink']
             session.add(invest)
     session.commit()
+    
     cdict = {}
     for com in session.query(Company):
         cdict[com.crunch_id] = 1
@@ -302,6 +318,56 @@ def store_investments():
             session.add(invest)
     session.commit()
 
+def store_ipo():
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    
+    company_folder = "crunchbase_scraper/crunchbase_scraper/company_json"
+    company_files = os.listdir(company_folder)
+    for fname in company_files:
+        fpath = os.path.join(company_folder, fname)
+        with open(fpath) as fh:
+            com_dict = json.load(fh, strict=False)
+        if com_dict['ipo'] is not None:
+            ipo = IPO()
+            rec = com_dict['ipo']
+            ipo.company = com_dict['permalink']
+            ipo.valuation = rec['valuation_amount']
+            ipo.year = rec['pub_year']
+            ipo.month = rec['pub_month']
+            ipo.day = rec['pub_day']
+            session.add(ipo)
+    session.commit()
+
+def store_acquisition():
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    
+    cdict = {}
+    for com in session.query(Company):
+        cdict[com.crunch_id] = 1
+
+    company_folder = "crunchbase_scraper/crunchbase_scraper/company_json"
+    company_files = os.listdir(company_folder)
+    for fname in company_files:
+        fpath = os.path.join(company_folder, fname)
+        with open(fpath) as fh:
+            com_dict = json.load(fh, strict=False)
+        if com_dict['acquisition'] is not None:
+            rec = com_dict['acquisition']
+            if not rec['acquiring_company']['permalink'] in cdict:
+                continue
+            acq = Acquisition()
+            acq.company = com_dict['permalink']
+            acq.acquiring_company = rec['acquiring_company']['permalink']
+            acq.amount = rec['price_amount']
+            acq.currency = rec['price_currency_code']
+            acq.year = rec['acquired_year']
+            acq.month = rec['acquired_month']
+            acq.day = rec['acquired_day']
+            session.add(acq)
+    session.commit()
+
 def create_tables():
     Base.metadata.create_all(engine)
 
@@ -319,7 +385,11 @@ def main():
 
     #store_companypeople()
 
-    store_investments()
+    #store_investments()
+
+    #store_ipo()
+    
+    store_acquisition()
 
 
 if __name__ == "__main__":

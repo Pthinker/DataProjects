@@ -30,7 +30,7 @@ def get_training(fpath):
     cols.remove("loss")
     cols = list(cols)
     train_data = train[cols]
-    train_label = train[["loss"]]
+    train_label = train["loss"].values
 
     train_data = clean_data(train_data)
 
@@ -38,10 +38,6 @@ def get_training(fpath):
 
 def main():
     train_data, train_label = get_training(config.train_fpath)
-    test_data = get_testing(config.test_fpath)
-
-    for id, value in test_data.iterrows():
-        print id, value
 
 if __name__ == "__main__":
     main()

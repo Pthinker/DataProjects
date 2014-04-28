@@ -16,10 +16,10 @@ def randomForest(train_data, target, test_data):
     return predictions
 
 def write_result(test_index, predictions, fname="result.csv"):
-    with open(os.path.join(config.result_folder, fname)) as fh:
+    with open(os.path.join(config.result_folder, fname), "w") as fh:
         fh.write("id,loss\n")
         for ind, val in enumerate(test_index):
-            fh.write(val + "," + str(int(prediction[ind])) + "\n")
+            fh.write(str(val) + "," + str(int(predictions[ind])) + "\n")
 
 def main():
     train_data, train_label = utils.get_training(config.train_fpath)

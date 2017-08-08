@@ -155,8 +155,7 @@ def ka_add_groupby_features_n_vs_1(df, group_columns_list, target_columns_list, 
     return df_new
 
 
-
-def main():
+def model1():
     prior, train, orders, products, aisles, departments = load_data()
     prior_orders_detail = orders.merge(right=prior, how='inner', on='order_id')
 
@@ -253,6 +252,24 @@ def main():
     submit.columns = sample_submission.columns.tolist()
     submit_final = sample_submission[['order_id']].merge(submit, how='left').fillna('None')
     submit_final.to_csv("../result/python_test.csv", index=False)
+
+
+def create_feature(priors, train, orders, products, aisles, departments):
+    # order cnt and re-order features
+    prods = pd.DataFrame()
+    prods['orders'] = priors.groupby(priors.product_id).size().astype(np.int32)
+    prods['reorders'] = priors['reordered'].groupby(priors.product_id).sum().astype(np.float32)
+    prods['reorder_rate'] = (prods.reorders / prods.orders).astype(np.float32)
+    products = products.join(prods, on='product_id')
+    products.set_index('product_id', drop=False, inplace=True)
+    del prods
+
+    print products.head()
+
+
+def main():
+    priors, train, orders, products, aisles, departments = load_data()
+    create_feature(priors, train, orders, products, aisles, departments)
 
 
 if __name__ == "__main__":

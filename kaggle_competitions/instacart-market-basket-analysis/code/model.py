@@ -14,11 +14,14 @@ department_fpath = "../data/departments.csv"
 
 def load_data():
     # order product
-    prior = pd.read_csv(op_prior_fpath, dtype={'order_id': np.int32, 'product_id': np.uint16, 'add_to_cart_order': np.int16, 'reordered': np.int8})
-    train = pd.read_csv(op_train_fpath, dtype={'order_id': np.int32, 'product_id': np.uint16, 'add_to_cart_order': np.int16, 'reordered': np.int8})
+    prior = pd.read_csv(op_prior_fpath, dtype={
+        'order_id': np.int32, 'product_id': np.uint16, 'add_to_cart_order': np.int16, 'reordered': np.int8})
+    train = pd.read_csv(op_train_fpath, dtype={
+        'order_id': np.int32, 'product_id': np.uint16, 'add_to_cart_order': np.int16, 'reordered': np.int8})
 
     # order
-    orders = pd.read_csv(order_fpath, dtype={'order_id': np.int32, 'user_id': np.int64, 'eval_set': 'category', 'order_number': np.int16, 
+    orders = pd.read_csv(order_fpath, dtype={
+        'order_id': np.int32, 'user_id': np.int64, 'eval_set': 'category', 'order_number': np.int16,
         'order_dow': np.int8, 'order_hour_of_day': np.int8, 'days_since_prior_order': np.float32})
 
     # product related
@@ -264,7 +267,23 @@ def create_feature(priors, train, orders, products, aisles, departments):
     products.set_index('product_id', drop=False, inplace=True)
     del prods
 
-    print products.head()
+    # add order info to priors
+    orders.set_index('order_id', inplace=True, drop=False)
+    priors = priors.join(orders, on='order_id', rsuffix='_')
+    priors.drop('order_id_', inplace=True, axis=1)
+
+    # user features
+    usr = pd.DataFrame()
+    usr['average_days_between_orders'] = orders.groupby('user_id')['days_since_prior_order'].mean().astype(np.float32)
+    usr['nb_orders'] = orders.groupby('user_id').size().astype(np.int16)
+    users = pd.DataFrame()
+    users['total_items'] = priors.groupby('user_id').size().astype(np.int16)
+    users['all_products'] = priors.groupby('user_id')['product_id'].apply(set)
+    users['total_distinct_items'] = (users.all_products.map(len)).astype(np.int16)
+    users = users.join(usr)
+    del usr
+    users['average_basket'] = (users.total_items / users.nb_orders).astype(np.float32)
+
 
 
 def main():

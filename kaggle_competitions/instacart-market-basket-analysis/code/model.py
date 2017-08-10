@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import xgboost
 import gc
+from sklearn.model_selection import train_test_split
 
 
 order_fpath = "../data/orders.csv"
@@ -29,50 +30,9 @@ def load_data():
     aisles = pd.read_csv(aisle_fpath)
     departments = pd.read_csv(department_fpath)
 
-    return prior, train, orders, products, aisles, departments
+    sample_submission = pd.read_csv("../data/sample_submission.csv")
 
-
-'''
-put all the previous ordered items of a user to an order
-'''
-def naive_model():
-    orders = pd.read_csv(order_fpath, header=0)
-    order_product_prior = pd.read_csv(op_prior_fpath, header=0)
-    order_product_train = pd.read_csv(op_train_fpath, header=0)
-
-    order_product_df = pd.concat([order_product_prior, order_product_train], ignore_index=True)
-    order_product = dict()
-    for idx, row in order_product_df.iterrows():
-        order = row["order_id"]
-        product = row["product_id"]
-        if order in order_product:
-            order_product[order].add(product)
-        else:
-            order_product[order] = set([product])
-
-    user_product = dict()
-    for idx, row in orders.iterrows():
-        order = row["order_id"]
-        user = row["user_id"]
-        label = row["eval_set"]
-        if label == "prior" or label == "train":
-            if user in user_product:
-                user_product[user] = user_product[user].union(order_product[order])
-            else:
-                user_product[user] = order_product[order]
-
-    with open("../result/simple_submission.csv", "w") as fh:
-        fh.write("order_id,products\n")
-        for idx, row in orders.iterrows():
-            order = row["order_id"]
-            user = row["user_id"]
-            label = row["eval_set"]
-            if label == "test":
-                if user in user_product:
-                    res = " ".join(map(str, user_product[user]))
-                else:
-                    res = "None"
-                fh.write("%s,%s\n" % (order, res))
+    return prior, train, orders, products, aisles, departments, sample_submission
 
 
 def ka_add_groupby_features_1_vs_n(df, group_columns_list, agg_dict, only_new_feature=True):
@@ -112,6 +72,7 @@ def ka_add_groupby_features_1_vs_n(df, group_columns_list, agg_dict, only_new_fe
 
     return df_new
 
+
 def ka_add_groupby_features_n_vs_1(df, group_columns_list, target_columns_list, methods_list, keep_only_stats=True, verbose=1):
     '''Create statistical columns, group by [N columns] and compute stats on [1 column]
 
@@ -150,7 +111,7 @@ def ka_add_groupby_features_n_vs_1(df, group_columns_list, target_columns_list, 
     grouped = df_new.groupby(group_columns_list)
 
     the_stats = grouped[target_name].agg(methods_list).reset_index()
-    the_stats.columns = [grouped_name] +                         ['_%s_%s_by_%s' % (grouped_name, method_name, target_name)                          for (grouped_name, method_name, target_name) in combine_name]
+    the_stats.columns = [grouped_name] + ['_%s_%s_by_%s' % (grouped_name, method_name, target_name) for (grouped_name, method_name, target_name) in combine_name]
     if keep_only_stats:
         return the_stats
     else:
@@ -158,39 +119,33 @@ def ka_add_groupby_features_n_vs_1(df, group_columns_list, target_columns_list, 
     return df_new
 
 
-def model1():
-    prior, train, orders, products, aisles, departments = load_data()
-    prior_orders_detail = orders.merge(right=prior, how='inner', on='order_id')
+def create_features(priors, train, orders, products, aisles, departments):
+    priors_orders_detail = orders.merge(right=priors, how='inner', on='order_id')
+    priors_orders_detail['_user_buy_product_times'] = priors_orders_detail.groupby(['user_id', 'product_id']).cumcount() + 1
 
-    # Product features
-    # _user_buy_product_times: the n-th times user has purchased this item
-    prior_orders_detail.loc[:, '_user_buy_product_times'] = prior_orders_detail.groupby(['user_id', 'product_id']).cumcount() + 1
-
-    #_prod_tot_cnts: total number of times the item is purchased
-    # _reorder_tot_cnts_of_this_prod: number of times the item is re-purchased
-    agg_dict = {'user_id': {'_prod_tot_cnts': 'count'}, 
-                'reordered': {'_prod_reorder_tot_cnts': 'sum'}, 
-                '_user_buy_product_times': {'_prod_buy_first_time_total_cnt': lambda x: sum(x==1),
-                                            '_prod_buy_second_time_total_cnt': lambda x: sum(x==2)}}
-    prd = ka_add_groupby_features_1_vs_n(prior_orders_detail, ['product_id'], agg_dict)
-
+    # product
+    agg_dict = {'user_id': {'_prod_tot_cnts': 'count'},
+                'reordered': {'_prod_reorder_tot_cnts': 'sum'},
+                '_user_buy_product_times': {'_prod_buy_first_time_total_cnt': lambda x: sum(x == 1),
+                                            '_prod_buy_second_time_total_cnt': lambda x: sum(x == 2)}}
+    prd = ka_add_groupby_features_1_vs_n(priors_orders_detail, ['product_id'], agg_dict)
     prd['_prod_reorder_prob'] = prd._prod_buy_second_time_total_cnt / prd._prod_buy_first_time_total_cnt
     prd['_prod_reorder_ratio'] = prd._prod_reorder_tot_cnts / prd._prod_tot_cnts
     prd['_prod_reorder_times'] = 1 + prd._prod_reorder_tot_cnts / prd._prod_buy_first_time_total_cnt
 
-    # User features
-
+    # user
     agg_dict_2 = {'order_number': {'_user_total_orders': 'max'},
-                 'days_since_prior_order': {'_user_sum_days_since_prior_order': 'sum', 
-                                            '_user_mean_days_since_prior_order': 'mean'}}
+                  'days_since_prior_order': {'_user_sum_days_since_prior_order': 'sum',
+                                             '_user_mean_days_since_prior_order': 'mean'}}
     users = ka_add_groupby_features_1_vs_n(orders[orders.eval_set == 'prior'], ['user_id'], agg_dict_2)
 
-    agg_dict_3 = {'reordered': {'_user_reorder_ratio': 
-                               lambda x: sum(prior_orders_detail.ix[x.index, 'reordered']==1)/
-                                         sum(prior_orders_detail.ix[x.index, 'order_number'] > 1)},
-                  'product_id': {'_user_total_products':'count', 
+    agg_dict_3 = {'reordered':
+                      {'_user_reorder_ratio':
+                           lambda x: sum(priors_orders_detail.ix[x.index, 'reordered'] == 1) /
+                                     sum(priors_orders_detail.ix[x.index, 'order_number'] > 1)},
+                  'product_id': {'_user_total_products': 'count',
                                  '_user_distinct_products': lambda x: x.nunique()}}
-    us = ka_add_groupby_features_1_vs_n(prior_orders_detail, ['user_id'], agg_dict_3)
+    us = ka_add_groupby_features_1_vs_n(priors_orders_detail, ['user_id'], agg_dict_3)
     users = users.merge(us, how='inner')
 
     users['_user_average_basket'] = users._user_total_products / users._user_total_orders
@@ -200,16 +155,18 @@ def model1():
 
     users = users.merge(us, how='inner')
 
-
-    agg_dict_4 = {'order_number': {'_up_order_count': 'count', 
-                                   '_up_first_order_number': 'min', 
-                                   '_up_last_order_number':'max'}, 
+    # user - product
+    agg_dict_4 = {'order_number': {'_up_order_count': 'count',
+                                   '_up_first_order_number': 'min',
+                                   '_up_last_order_number': 'max'},
                   'add_to_cart_order': {'_up_average_cart_position': 'mean'}}
 
-    data = ka_add_groupby_features_1_vs_n(df=prior_orders_detail, 
-                                          group_columns_list=['user_id', 'product_id'], 
+    data = ka_add_groupby_features_1_vs_n(df=priors_orders_detail,
+                                          group_columns_list=['user_id', 'product_id'],
                                           agg_dict=agg_dict_4)
+
     data = data.merge(prd, how='inner', on='product_id').merge(users, how='inner', on='user_id')
+
     data['_up_order_rate'] = data._up_order_count / data._user_total_orders
     data['_up_order_since_last_order'] = data._user_total_orders - data._up_last_order_number
     data['_up_order_rate_since_first_order'] = data._up_order_count / (data._user_total_orders - data._up_first_order_number + 1)
@@ -217,78 +174,57 @@ def model1():
     train = train.merge(right=orders[['order_id', 'user_id']], how='left', on='order_id')
     data = data.merge(train[['user_id', 'product_id', 'reordered']], on=['user_id', 'product_id'], how='left')
 
-    #del prior_orders_detail, orders
+    del orders
     gc.collect()
 
-    train = data.loc[data.eval_set == "train",:]
+    return data
+
+
+def model(data, sample_submission):
+    train = data.loc[data.eval_set == "train", :]
     train.drop(['eval_set', 'user_id', 'product_id', 'order_id'], axis=1, inplace=True)
     train.loc[:, 'reordered'] = train.reordered.fillna(0)
 
-    X_test = data.loc[data.eval_set == "test",:]
-    X_train, X_val, y_train, y_val = train_test_split(train.drop('reordered', axis=1), train.reordered, test_size=0.9, random_state=42)
-    d_train = xgboost.DMatrix(X_train, y_train)
+    X_test = data.loc[data.eval_set == "test", :]
 
+    X_train, X_val, y_train, y_val = train_test_split(train.drop('reordered', axis=1), train.reordered,
+                                                      test_size=0.9, random_state=42)
+    d_train = xgboost.DMatrix(X_train, y_train)
     xgb_params = {
-            "objective": "reg:logistic",
-            "eval_metric": "logloss",
-            "eta": 0.1,
-            "max_depth": 6,
-            "min_child_weight": 10,
-            "gamma": 0.70,
-            "subsample": 0.76,
-            "colsample_bytree": 0.95,
-            "alpha": 2e-05,
-            "lambda": 10
+        "objective": "reg:logistic"
+        , "eval_metric": "logloss"
+        , "eta": 0.1
+        , "max_depth": 6
+        , "min_child_weight": 10
+        , "gamma": 0.70
+        , "subsample": 0.76
+        , "colsample_bytree": 0.95
+        , "alpha": 2e-05
+        , "lambda": 10
     }
 
-    watchlist= [(d_train, "train")]
+    watchlist = [(d_train, "train")]
     bst = xgboost.train(params=xgb_params, dtrain=d_train, num_boost_round=80, evals=watchlist, verbose_eval=10)
     xgboost.plot_importance(bst)
 
     d_test = xgboost.DMatrix(X_test.drop(['eval_set', 'user_id', 'order_id', 'reordered', 'product_id'], axis=1))
-    X_test.loc[:,'reordered'] = (bst.predict(d_test) > 0.21).astype(int)
+    X_test.loc[:, 'reordered'] = (bst.predict(d_test) > 0.21).astype(int)
     X_test.loc[:, 'product_id'] = X_test.product_id.astype(str)
-    submit = ka_add_groupby_features_n_vs_1(X_test[X_test.reordered == 1], group_columns_list=['order_id'],
-            target_columns_list= ['product_id'], 
-            methods_list=[lambda x: ' '.join(set(x))], keep_only_stats=True)
-
+    submit = ka_add_groupby_features_n_vs_1(X_test[X_test.reordered == 1],
+                                            group_columns_list=['order_id'],
+                                            target_columns_list=['product_id'],
+                                            methods_list=[lambda x: ' '.join(set(x))], keep_only_stats=True)
     submit.columns = sample_submission.columns.tolist()
-    submit_final = sample_submission[['order_id']].merge(submit, how='left').fillna('None')
-    submit_final.to_csv("../result/python_test.csv", index=False)
-
-
-def create_feature(priors, train, orders, products, aisles, departments):
-    # order cnt and re-order features
-    prods = pd.DataFrame()
-    prods['orders'] = priors.groupby(priors.product_id).size().astype(np.int32)
-    prods['reorders'] = priors['reordered'].groupby(priors.product_id).sum().astype(np.float32)
-    prods['reorder_rate'] = (prods.reorders / prods.orders).astype(np.float32)
-    products = products.join(prods, on='product_id')
-    products.set_index('product_id', drop=False, inplace=True)
-    del prods
-
-    # add order info to priors
-    orders.set_index('order_id', inplace=True, drop=False)
-    priors = priors.join(orders, on='order_id', rsuffix='_')
-    priors.drop('order_id_', inplace=True, axis=1)
-
-    # user features
-    usr = pd.DataFrame()
-    usr['average_days_between_orders'] = orders.groupby('user_id')['days_since_prior_order'].mean().astype(np.float32)
-    usr['nb_orders'] = orders.groupby('user_id').size().astype(np.int16)
-    users = pd.DataFrame()
-    users['total_items'] = priors.groupby('user_id').size().astype(np.int16)
-    users['all_products'] = priors.groupby('user_id')['product_id'].apply(set)
-    users['total_distinct_items'] = (users.all_products.map(len)).astype(np.int16)
-    users = users.join(usr)
-    del usr
-    users['average_basket'] = (users.total_items / users.nb_orders).astype(np.float32)
-
+    result = sample_submission[['order_id']].merge(submit, how='left').fillna('None')
+    result.to_csv("../result/res.csv", index=False)
 
 
 def main():
-    priors, train, orders, products, aisles, departments = load_data()
-    create_feature(priors, train, orders, products, aisles, departments)
+    priors, train, orders, products, aisles, departments, sample_submission = load_data()
+
+    data = create_features(priors, train, orders, products, aisles, departments)
+
+    model(data, sample_submission)
 
 
 if __name__ == "__main__":

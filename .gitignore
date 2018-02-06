@@ -37,3 +37,6 @@ nosetests.xml
 
 data/
 *.swp
+*.DS_Store
+.idea
+*.csv
